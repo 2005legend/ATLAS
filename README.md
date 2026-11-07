@@ -94,6 +94,9 @@ Follow the docs in order. Each step ends with a command that tells you whether i
 7. [Backups and reboots](docs/07-backups.md)
 8. [Troubleshooting: every problem we hit](docs/08-troubleshooting.md)
 9. [Command reference: what to say to the bot, slash commands, admin commands, API](docs/09-commands.md)
+10. [Setup commands, in order: every terminal command for a fresh install](docs/10-setup-commands.md)
+
+In a hurry? Follow [doc 10](docs/10-setup-commands.md) from top to bottom; docs 2–7 explain the why.
 
 Files you will copy are in `vm1/`, `vm2/`, `assistant/` and `laptop/`. They contain placeholders such as
 `VM1_TAILSCALE_IP`, `VM2_SSH_TARGET` and `YOUR_D1_DATABASE_ID`; the docs say where each value comes from.
