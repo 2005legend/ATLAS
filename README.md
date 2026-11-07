@@ -93,6 +93,7 @@ Follow the docs in order. Each step ends with a command that tells you whether i
 6. [Security model and what was tested](docs/06-security.md)
 7. [Backups and reboots](docs/07-backups.md)
 8. [Troubleshooting: every problem we hit](docs/08-troubleshooting.md)
+9. [Command reference: what to say to the bot, slash commands, admin commands, API](docs/09-commands.md)
 
 Files you will copy are in `vm1/`, `vm2/`, `assistant/` and `laptop/`. They contain placeholders such as
 `VM1_TAILSCALE_IP`, `VM2_SSH_TARGET` and `YOUR_D1_DATABASE_ID`; the docs say where each value comes from.
