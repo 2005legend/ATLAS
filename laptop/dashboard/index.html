@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Assistant — Today</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel-2: #1d212a; --line: #2a2f3a; --text: #e7e9ee; --muted: #9aa1ae;
+    --accent: #7aa2ff; --ok: #3fb97f; --warn: #e3a33b; --bad: #e5566b;
+    --urgent: #e5566b; --high: #e3a33b; --medium: #7aa2ff; --low: #8b93a3;
+    --radius: 12px; --gap: 16px;
+    font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f5f6f8; --panel: #ffffff; --panel-2: #f0f2f5; --line: #e2e5ea; --text: #1b1f27; --muted: #5f6775; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-size: 14px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: var(--gap); padding: 18px 24px;
+           border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  h1 small { color: var(--muted); font-weight: 400; margin-left: 8px; }
+  .health { display: flex; gap: 12px; flex-wrap: wrap; }
+  .dot { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+  .dot::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.ok::before { background: var(--ok); } .dot.bad::before { background: var(--bad); }
+  main { display: grid; grid-template-columns: 1.4fr 1fr; gap: var(--gap); padding: var(--gap) 24px 32px; max-width: 1400px; margin: 0 auto; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 12px 16px; } header { padding: 14px 16px; } }
+  .col { display: flex; flex-direction: column; gap: var(--gap); min-width: 0; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+  section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; display: flex; justify-content: space-between; align-items: center; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  @media (max-width: 560px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+  .stat { background: var(--panel-2); border-radius: 10px; padding: 12px; }
+  .stat b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+  .stat span { color: var(--muted); font-size: 12px; }
+  .group { margin-top: 6px; }
+  .group h3 { font-size: 12px; color: var(--muted); margin: 14px 0 6px; font-weight: 600; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li.item { display: flex; align-items: flex-start; gap: 10px; padding: 9px 4px; border-top: 1px solid var(--line); }
+  li.item:first-child { border-top: none; }
+  .item .body { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .item .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .pill { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid currentColor; margin-right: 6px; }
+  .p-urgent { color: var(--urgent); } .p-high { color: var(--high); } .p-medium { color: var(--medium); } .p-low { color: var(--low); }
+  .overdue .meta { color: var(--bad); }
+  input[type=checkbox] { width: 16px; height: 16px; margin-top: 2px; accent-color: var(--ok); cursor: pointer; }
+  button { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; cursor: pointer; font: inherit; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #0b1020; font-weight: 600; }
+  button.link { background: none; border: none; color: var(--muted); padding: 2px 4px; font-size: 12px; }
+  button.link:hover { color: var(--bad); }
+  form { display: grid; gap: 8px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .row > * { flex: 1; min-width: 110px; }
+  input[type=text], select { width: 100%; background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+         border-radius: 8px; padding: 8px 10px; font: inherit; }
+  input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .empty { color: var(--muted); padding: 6px 4px; }
+  .note { font-size: 12px; color: var(--muted); }
+  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--panel-2); border: 1px solid var(--line);
+           padding: 10px 14px; border-radius: 10px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; }
+  #toast.show { opacity: 1; } #toast.err { border-color: var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Today <small id="now">…</small></h1>
+  <div class="health" id="health" aria-label="System health"></div>
+</header>
+
+<main>
+  <div class="col">
+    <section>
+      <div class="stats">
+        <div class="stat"><b id="s-overdue">–</b><span>overdue</span></div>
+        <div class="stat"><b id="s-today">–</b><span>due today</span></div>
+        <div class="stat"><b id="s-week">–</b><span>next 7 days</span></div>
+        <div class="stat"><b id="s-done">–</b><span>done today</span></div>
+      </div>
+    </section>
+    <section>
+      <h2>Tasks <button class="link" id="refresh" title="Refresh">↻ refresh</button></h2>
+      <div id="tasks"></div>
+    </section>
+    <section>
+      <h2>Add task</h2>
+      <form id="f-task">
+        <input type="text" name="title" placeholder="What needs doing?" required maxlength="300">
+        <div class="row">
+          <input type="text" name="due" placeholder="Due (e.g. tomorrow 10am, by Sunday)">
+          <select name="priority"><option>medium</option><option>high</option><option>urgent</option><option>low</option></select>
+          <select name="category"><option>other</option><option>college</option><option>internship</option><option>research</option>
+            <option>personal</option><option>career</option><option>finance</option><option>projects</option></select>
+        </div>
+        <div><button class="primary">Add task</button></div>
+      </form>
+    </section>
+  </div>
+
+  <div class="col">
+    <section>
+      <h2>Habits</h2>
+      <ul id="habits"></ul>
+    </section>
+    <section>
+      <h2>Spending this month <span id="exp-total" style="text-transform:none;letter-spacing:0;color:var(--text);font-size:15px"></span></h2>
+      <ul id="expenses"></ul>
+      <form id="f-exp" style="margin-top:12px">
+        <div class="row">
+          <input type="text" name="amount" placeholder="₹ amount" inputmode="decimal" required pattern="[0-9]+([.][0-9]{1,2})?">
+          <select name="category"><option>food</option><option>transport</option><option>shopping</option><option>bills</option>
+            <option>education</option><option>health</option><option>entertainment</option><option>rent</option><option>other</option></select>
+          <input type="text" name="note" placeholder="Note (optional)" maxlength="300">
+        </div>
+        <div><button>Log expense</button></div>
+      </form>
+    </section>
+    <section>
+      <h2>Reminders</h2>
+      <ul id="reminders"></ul>
+      <form id="f-rem" style="margin-top:12px">
+        <div class="row">
+          <input type="text" name="text" placeholder="Remind me to…" required maxlength="1000">
+          <input type="text" name="when" placeholder="When (e.g. 8pm, in 30 minutes)" required>
+          <select name="repeat"><option value="none">once</option><option value="daily">daily</option>
+            <option value="weekdays">weekdays</option><option value="weekly">weekly</option><option value="monthly">monthly</option></select>
+        </div>
+        <div><button>Set reminder</button></div>
+      </form>
+    </section>
+    <section>
+      <h2>Inbox & ideas</h2>
+      <form id="f-inbox">
+        <div class="row">
+          <input type="text" name="text" placeholder="Capture an idea or note…" required maxlength="8000">
+          <select name="kind"><option>idea</option><option>note</option><option>link</option><option>snippet</option></select>
+        </div>
+        <div class="row">
+          <input type="text" name="project" placeholder="Project (optional)">
+          <button>Save</button>
+        </div>
+      </form>
+      <input type="text" id="q" placeholder="Search notes…" style="margin:12px 0 4px">
+      <ul id="inbox"></ul>
+    </section>
+    <section id="sys-sec">
+      <h2>System</h2>
+      <ul id="system"></ul>
+      <p class="note">Reminders and the 08:00 briefing come from Cloudflare and work even while the VMs sleep.</p>
+    </section>
+  </div>
+</main>
+<div id="toast" role="status"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const el = (tag, attrs = {}, ...kids) => {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) k === "class" ? (n.className = v) : k.startsWith("on") ? n.addEventListener(k.slice(2), v) : n.setAttribute(k, v);
+  for (const k of kids) n.append(k instanceof Node ? k : document.createTextNode(String(k ?? "")));
+  return n;
+};
+function toast(msg, err = false) {
+  const t = $("#toast"); t.textContent = msg; t.className = "show" + (err ? " err" : "");
+  clearTimeout(toast.t); toast.t = setTimeout(() => (t.className = ""), 3500);
+}
+async function api(method, path, body) {
+  const r = await fetch("/api" + path, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail || data));
+  return data;
+}
+
+function taskItem(t, overdue = false) {
+  const box = el("input", { type: "checkbox", title: "Mark done", "aria-label": "Mark done: " + t.title });
+  box.addEventListener("change", async () => {
+    try { await api("POST", `/tasks/${t.id}/done`); toast("Done: " + t.title); load(); } catch (e) { toast(e.message, true); box.checked = false; }
+  });
+  const del = el("button", { class: "link", title: "Delete task", onclick: async () => {
+    if (!confirm(`Delete "${t.title}"?`)) return;
+    try { await api("DELETE", `/tasks/${t.id}`); toast("Deleted"); load(); } catch (e) { toast(e.message, true); }
+  } }, "✕");
+  const meta = [t.category, t.due ? "due " + t.due : "no deadline"].join(" · ");
+  const subs = (t.subtasks || []).filter((s) => s.status === "open").length;
+  return el("li", { class: "item" + (overdue ? " overdue" : "") }, box,
+    el("div", { class: "body" }, el("span", { class: "pill p-" + t.priority }, t.priority), t.title,
+      el("div", { class: "meta" }, meta + (subs ? ` · ${subs} open subtask(s)` : ""))), del);
+}
+function group(title, items, overdue = false) {
+  const g = el("div", { class: "group" }, el("h3", {}, `${title} (${items.length})`));
+  const ul = el("ul");
+  items.length ? items.forEach((t) => ul.append(taskItem(t, overdue))) : ul.append(el("li", { class: "empty" }, "Nothing here."));
+  g.append(ul); return g;
+}
+
+async function loadAgenda() {
+  const a = await api("GET", "/agenda?days=7");
+  $("#s-overdue").textContent = a.overdue.length; $("#s-today").textContent = a.today.length;
+  $("#s-week").textContent = a.next_7_days.length; $("#s-done").textContent = a.done_today;
+  const box = $("#tasks"); box.replaceChildren();
+  if (a.overdue.length) box.append(group("Overdue", a.overdue, true));
+  box.append(group("Due today", a.today), group("Next 7 days", a.next_7_days));
+  const undated = await api("GET", "/tasks?status=open&limit=200");
+  const nodl = undated.tasks.filter((t) => !t.due);
+  if (nodl.length) box.append(group("No deadline", nodl));
+}
+async function loadReminders() {
+  const r = await api("GET", "/reminders?status=pending&limit=20");
+  const ul = $("#reminders"); ul.replaceChildren();
+  if (!r.reminders.length) ul.append(el("li", { class: "empty" }, "No upcoming reminders."));
+  for (const x of r.reminders) {
+    ul.append(el("li", { class: "item" }, el("div", { class: "body" }, x.text,
+      el("div", { class: "meta" }, x.due_local + (x.repeat !== "none" ? ` · repeats ${x.repeat}` : ""))),
+      el("button", { class: "link", title: "Cancel reminder", onclick: async () => {
+        try { await api("POST", `/reminders/${x.id}/cancel`); toast("Reminder cancelled"); loadReminders(); } catch (e) { toast(e.message, true); }
+      } }, "✕")));
+  }
+}
+async function loadInbox() {
+  const q = $("#q").value.trim();
+  const r = await api("GET", "/inbox?limit=12" + (q ? "&q=" + encodeURIComponent(q) : ""));
+  const ul = $("#inbox"); ul.replaceChildren();
+  if (!r.items.length) ul.append(el("li", { class: "empty" }, q ? "No matches." : "Inbox is empty."));
+  for (const x of r.items) ul.append(el("li", { class: "item" }, el("div", { class: "body" }, x.text,
+    el("div", { class: "meta" }, [x.kind, x.project, x.created, x.status === "processed" ? "→ task" : ""].filter(Boolean).join(" · ")))));
+}
+async function loadHabits() {
+  const r = await api("GET", "/habits");
+  const ul = $("#habits"); ul.replaceChildren();
+  if (!r.habits.length) ul.append(el("li", { class: "empty" }, 'No habits yet. Tell the bot: "track DSA practice daily".'));
+  for (const h of r.habits) {
+    const box = el("input", { type: "checkbox", title: "Done today", "aria-label": "Done today: " + h.name });
+    box.checked = h.done_today; box.disabled = h.done_today;
+    box.addEventListener("change", async () => {
+      try { const s = await api("POST", `/habits/${h.id}/checkin`, { day: "today" }); toast(`${h.name}: streak ${s.streak} ${s.streak_unit}`); loadHabits(); }
+      catch (e) { toast(e.message, true); box.checked = false; }
+    });
+    const goal = h.schedule === "weekly" ? `${h.this_week}/${h.per_week} this week` : h.schedule;
+    ul.append(el("li", { class: "item" }, box, el("div", { class: "body" }, h.name,
+      el("div", { class: "meta" }, `${h.streak ? "🔥 " + h.streak + " " + h.streak_unit : "no streak yet"} · ${goal}`))));
+  }
+}
+async function loadExpenses() {
+  const s = await api("GET", "/expenses/summary?period=month");
+  $("#exp-total").textContent = "₹" + s.total.toLocaleString("en-IN");
+  const ul = $("#expenses"); ul.replaceChildren();
+  if (!s.by_category.length) ul.append(el("li", { class: "empty" }, "Nothing logged this month."));
+  for (const c of s.by_category) ul.append(el("li", { class: "item" }, el("div", { class: "body" }, c.category,
+    el("div", { class: "meta" }, `${c.count} entr${c.count === 1 ? "y" : "ies"}`)), el("b", {}, "₹" + c.total.toLocaleString("en-IN"))));
+  if (s.previous_period_total) ul.append(el("li", { class: "empty" }, `Last month: ₹${s.previous_period_total.toLocaleString("en-IN")}`));
+}
+$("#f-exp").addEventListener("submit", async (e) => {
+  e.preventDefault(); const f = new FormData(e.target);
+  try { const x = await api("POST", "/expenses", { amount: parseFloat(f.get("amount")), category: f.get("category"), note: f.get("note") });
+        toast(`Logged ₹${x.amount} (${x.category}) · month ₹${x.month_total}`); e.target.reset(); loadExpenses(); }
+  catch (err) { toast(err.message, true); }
+});
+
+const LABELS = { hermes_gateway: "Hermes + Telegram", dsh_bridge: "DSH bridge (VM 2)", freellmapi: "freellmapi",
+  laptop_ollama: "Laptop Ollama", reminder_worker: "Reminders (Cloudflare)", disk_data: "VM 1 disk" };
+async function loadSystem() {
+  const health = $("#health"), ul = $("#system");
+  try {
+    const s = await api("GET", "/system");
+    $("#now").textContent = s.local_time;
+    health.replaceChildren(); ul.replaceChildren();
+    for (const [k, label] of Object.entries(LABELS)) {
+      const v = s[k] || {};
+      health.append(el("span", { class: "dot " + (v.ok ? "ok" : "bad") }, label.split(" (")[0]));
+      const detail = k === "disk_data" ? `${v.free_gb} GB free` : v.ms !== undefined ? `${v.ms} ms` : (v.active || v.detail || "");
+      ul.append(el("li", { class: "item" }, el("div", { class: "body" }, label, el("div", { class: "meta" }, (v.ok ? "OK" : "Problem") + (detail ? " · " + detail : "")))));
+    }
+  } catch (e) {
+    health.replaceChildren(el("span", { class: "dot bad" }, "VM 1 unreachable"));
+    ul.replaceChildren(el("li", { class: "empty" }, e.message));
+  }
+}
+async function load() {
+  await Promise.allSettled([loadAgenda(), loadReminders(), loadInbox(), loadHabits(), loadExpenses()]).then((rs) => {
+    const bad = rs.find((r) => r.status === "rejected"); if (bad) toast(bad.reason.message, true);
+  });
+}
+
+$("#f-task").addEventListener("submit", async (e) => {
+  e.preventDefault(); const f = new FormData(e.target);
+  const body = { title: f.get("title"), priority: f.get("priority"), category: f.get("category") };
+  if (f.get("due").trim()) body.due = f.get("due").trim();
+  try { const t = await api("POST", "/tasks", body); toast(`Added: ${t.title}${t.due ? " · due " + t.due : ""}`); e.target.reset(); load(); }
+  catch (err) { toast(err.message, true); }
+});
+$("#f-rem").addEventListener("submit", async (e) => {
+  e.preventDefault(); const f = new FormData(e.target);
+  try { const r = await api("POST", "/reminders", { text: f.get("text"), when: f.get("when"), repeat: f.get("repeat") });
+        toast(`Reminder set: ${r.due_local}`); e.target.reset(); loadReminders(); }
+  catch (err) { toast(err.message, true); }
+});
+$("#f-inbox").addEventListener("submit", async (e) => {
+  e.preventDefault(); const f = new FormData(e.target);
+  try { await api("POST", "/inbox", { text: f.get("text"), kind: f.get("kind"), project: f.get("project") });
+        toast("Saved to inbox"); e.target.reset(); loadInbox(); }
+  catch (err) { toast(err.message, true); }
+});
+let qt; $("#q").addEventListener("input", () => { clearTimeout(qt); qt = setTimeout(loadInbox, 300); });
+$("#refresh").addEventListener("click", () => { load(); loadSystem(); });
+
+load(); loadSystem();
+setInterval(load, 60000); setInterval(loadSystem, 120000);
+</script>
+</body>
+</html>

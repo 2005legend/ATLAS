@@ -1,0 +1,169 @@
+#!/usr/bin/python3 -I
+"""dsh-ctl: the only privileged entry point the DSH bridge may call (via sudo).
+
+Every DSH task runs in its own transient systemd unit as dsh-runner:
+  - sees only its own workspace and its own DSH home (TemporaryFileSystem=/data + BindPaths)
+  - read-only OS, private /tmp, no new privileges (no sudo), CPU / memory / process / time limits
+  - secrets come from a root-only EnvironmentFile, never from a command line
+
+Usage (as root, normally `sudo -n /usr/local/sbin/dsh-ctl ...` from user dsh-bridge):
+  prepare <task_id>            create the workspace from /data/dsh/inbox/<task_id>/ (files/, prompt.txt)
+  run     <task_id> <timeout>  run DSH in the sandbox; prints DSH stdout/stderr; exit code = DSH's
+  stop    <task_id>            stop the task's unit (process group killed by systemd)
+  list    <task_id>            regular files in the workspace: "<path>\\t<size>" per line
+  read    <task_id> <path>     print one workspace file (path checked to stay inside)
+  diff    <task_id>            git diff of the workspace against its input commit
+"""
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+RUNNER = "dsh-runner"
+WORKSPACES = Path("/data/dsh/workspaces")
+HOMES = Path("/data/dsh/homes")
+INBOX = Path("/data/dsh/inbox")
+CONFIG = Path("/etc/dsh/cordis.patch.yml")
+ENV_FILE = Path("/etc/dsh/runner.env")
+DSH_BIN = "/opt/npm/bin/dsh"
+TASK_RE = re.compile(r"^task-[0-9a-f]{12}$")
+PATH_RE = re.compile(r"^(?!/)(?!.*\.\.)[A-Za-z0-9._/\-]{1,200}$")
+SKIP = {".git", "__pycache__", ".pytest_cache", "node_modules", ".venv"}
+MAX_READ = 200_001
+
+
+def die(msg: str, code: int = 2) -> None:
+    print(f"dsh-ctl: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def task_arg(i: int) -> str:
+    if len(sys.argv) <= i or not TASK_RE.match(sys.argv[i]):
+        die("invalid task id")
+    return sys.argv[i]
+
+
+def as_runner(*cmd: str, **kw) -> subprocess.CompletedProcess:
+    return subprocess.run(["runuser", "-u", RUNNER, "--", *cmd], capture_output=True, **kw)
+
+
+def read_nofollow(path: Path) -> bytes:
+    """Read a file the bridge user wrote, refusing symlinks at open time (no check-then-use race)."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as e:
+        die(f"refused to read {path.name}: {e.strerror}")
+    with os.fdopen(fd, "rb") as f:
+        return f.read(MAX_READ)
+
+
+def git(ws: Path, *args: str) -> subprocess.CompletedProcess:
+    return as_runner("git", "-C", str(ws), "-c", "safe.directory=*", "-c", "user.name=dsh-bridge",
+                     "-c", "user.email=dsh-bridge@localhost", *args, text=True)
+
+
+def prepare(task: str) -> None:
+    ws, home, inbox = WORKSPACES / task, HOMES / task, INBOX / task
+    if ws.exists():
+        die("workspace already exists")
+    # The inbox is written by the unprivileged bridge user: never follow a symlink it could plant.
+    for p in (inbox, inbox / "prompt.txt", inbox / "files"):
+        if p.is_symlink():
+            die(f"refused symlink in inbox: {p.name}")
+    if not (inbox / "prompt.txt").is_file():
+        die("missing prompt")
+    for d in (ws, home):
+        d.mkdir(mode=0o700, parents=True)
+        shutil.chown(d, RUNNER, RUNNER)
+    files = inbox / "files"
+    if files.is_dir():
+        for src in files.rglob("*"):
+            rel = src.relative_to(files)
+            if src.is_symlink() or not PATH_RE.match(str(rel)):
+                die(f"refused input path {rel}")
+            if src.is_file():
+                as_runner("mkdir", "-p", str((ws / rel).parent), check=True)
+                as_runner("tee", str(ws / rel), input=read_nofollow(src), check=True)
+    as_runner("cp", str(CONFIG), str(home / "cordis.patch.yml"), check=True)
+    as_runner("tee", str(home / "prompt.txt"), input=read_nofollow(inbox / "prompt.txt"), check=True)
+    git(ws, "init", "-q")
+    git(ws, "add", "-A")
+    git(ws, "commit", "-q", "--allow-empty", "-m", "task input")
+
+
+def run(task: str, timeout: int) -> int:
+    ws, home = WORKSPACES / task, HOMES / task
+    if not ws.is_dir() or not home.is_dir():
+        die("task not prepared")
+    unit = f"dsh-{task}"
+    cmd = [
+        "systemd-run", "--quiet", "--wait", "--pipe", "--collect", f"--unit={unit}",
+        "-p", f"User={RUNNER}", "-p", f"Group={RUNNER}",
+        "-p", "NoNewPrivileges=yes", "-p", "PrivateTmp=yes", "-p", "PrivateDevices=yes",
+        "-p", "ProtectHome=yes", "-p", "ProtectSystem=strict",
+        "-p", "ProtectKernelTunables=yes", "-p", "ProtectKernelModules=yes", "-p", "ProtectControlGroups=yes",
+        "-p", "RestrictSUIDSGID=yes", "-p", "LockPersonality=yes",
+        "-p", "TemporaryFileSystem=/data", "-p", f"BindPaths={ws} {home}",
+        "-p", f"WorkingDirectory={ws}",
+        "-p", f"EnvironmentFile={ENV_FILE}",
+        "-p", f"Environment=HOME={home} DSH_HOME={home} PATH=/opt/npm/bin:/usr/local/bin:/usr/bin:/bin",
+        "-p", "MemoryMax=2G", "-p", "CPUQuota=300%", "-p", "TasksMax=512",
+        "-p", f"RuntimeMaxSec={timeout}",
+        "/bin/sh", "-c", f'exec {DSH_BIN} headless "$(cat "$HOME/prompt.txt")"',
+    ]
+    return subprocess.run(cmd).returncode
+
+
+def stop(task: str) -> None:
+    subprocess.run(["systemctl", "stop", f"dsh-{task}.service"], capture_output=True)
+
+
+def resolve(task: str, rel: str) -> Path:
+    ws = WORKSPACES / task
+    if not PATH_RE.match(rel) or any(p in SKIP for p in Path(rel).parts):
+        die("invalid path")
+    done = as_runner("realpath", "-e", "--", str(ws / rel), text=True)
+    if done.returncode != 0:
+        die("file not found", 3)
+    target = Path(done.stdout.strip())
+    if ws not in target.parents:
+        die("path escapes the task workspace", 4)
+    return target
+
+
+def main() -> None:
+    if os.geteuid() != 0:
+        die("must run as root (via sudo)")
+    op = sys.argv[1] if len(sys.argv) > 1 else ""
+    if op == "prepare":
+        prepare(task_arg(2))
+    elif op == "run":
+        t = task_arg(2)
+        timeout = int(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3].isdigit() else 0
+        if not 30 <= timeout <= 7200:
+            die("timeout must be 30-7200 s")
+        sys.exit(run(t, timeout))
+    elif op == "stop":
+        stop(task_arg(2))
+    elif op == "list":
+        ws = WORKSPACES / task_arg(2)
+        out = as_runner("find", str(ws), "-type", "f", "-printf", "%P\t%s\n", text=True).stdout
+        for line in sorted(out.splitlines()):
+            if line and not any(p in SKIP for p in Path(line.split("\t")[0]).parts):
+                print(line)
+    elif op == "read":
+        t = task_arg(2)
+        target = resolve(t, sys.argv[3] if len(sys.argv) > 3 else "")
+        sys.stdout.buffer.write(as_runner("head", "-c", str(MAX_READ), "--", str(target)).stdout)
+    elif op == "diff":
+        ws = WORKSPACES / task_arg(2)
+        git(ws, "add", "-A")
+        print(git(ws, "diff", "--cached", "HEAD").stdout, end="")
+    else:
+        die("usage: dsh-ctl prepare|run|stop|list|read|diff <task_id> [...]")
+
+
+if __name__ == "__main__":
+    main()

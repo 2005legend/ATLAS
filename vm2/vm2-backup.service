@@ -1,0 +1,5 @@
+[Unit]
+Description=Daily VM 2 critical-state backup
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/vm2-backup.sh

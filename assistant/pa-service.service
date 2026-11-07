@@ -1,0 +1,12 @@
+[Unit]
+Description=Personal assistant service (tasks, inbox, agenda)
+After=network-online.target
+[Service]
+WorkingDirectory=/data/pa/service
+Environment=PA_ROOT=/data/pa
+Environment=PA_TIMEZONE=Asia/Kolkata
+ExecStart=/data/pa/service/.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8100 --log-level warning
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=default.target

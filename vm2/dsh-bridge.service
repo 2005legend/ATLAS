@@ -1,0 +1,14 @@
+[Unit]
+Description=DSH delegation bridge (task API for Hermes)
+After=network-online.target ollama.service tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=dsh-bridge
+WorkingDirectory=/data/dsh/bridge
+ExecStart=/data/dsh/bridge/.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000 --log-level info
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

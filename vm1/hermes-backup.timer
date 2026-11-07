@@ -1,0 +1,8 @@
+[Unit]
+Description=Run the Hermes backup daily; catch up after a pause or reboot
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+RandomizedDelaySec=10min
+[Install]
+WantedBy=timers.target

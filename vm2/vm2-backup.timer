@@ -1,0 +1,8 @@
+[Unit]
+Description=Run the VM 2 backup daily; catch up after a pause or reboot
+[Timer]
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+RandomizedDelaySec=10min
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,20 @@
+# secrets and local state: never commit these
+.env
+*.env
+!*.env.example
+token
+*_token
+worker.json
+*.db
+*.db-*
+*.tgz
+*.sql.bak
+hermes-backups/
+.wrangler/
+.dev.vars
+
+# python / node
+__pycache__/
+.pytest_cache/
+.venv/
+node_modules/

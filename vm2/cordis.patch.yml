@@ -1,0 +1,27 @@
+- id: llm-pi-ai
+  config:
+    providers:
+      freellmapi:
+        displayName: freellmapi (free-tier router on this VM)
+        apiKeyEnv: FREELLMAPI_API_KEY
+        api: openai-completions
+        baseURL: http://127.0.0.1:3001/v1
+        models:
+          - id: auto:smart
+            name: freellmapi auto:smart
+            contextWindow: 65536
+            maxTokens: 8192
+      ollama:
+        displayName: Ollama (local CPU, offline fallback)
+        apiKeyEnv: OLLAMA_API_KEY
+        api: openai-completions
+        baseURL: http://127.0.0.1:11434/v1
+        models:
+          - id: qwen3.5-4b-64k
+            name: Qwen3.5 4B (shared 64K copy; DSH told 32K)
+            contextWindow: 32768
+            maxTokens: 8192
+- id: agent-default-model
+  config:
+    provider: freellmapi
+    model: auto:smart

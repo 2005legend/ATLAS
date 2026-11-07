@@ -1,0 +1,5 @@
+[Unit]
+Description=Daily Hermes backup (full + critical state)
+[Service]
+Type=oneshot
+ExecStart=%h/bin/hermes-backup.sh

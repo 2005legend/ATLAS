@@ -1,0 +1,14 @@
+# Local overrides (hermes setup): pinned source build, data on /data, InstaBox proxy CA,
+# published only on localhost (for DSH) and the Tailscale IP (firewalled to VM 1 + laptop).
+services:
+  freellmapi:
+    image: freellmapi-local:v0.16.20
+    ports: !override
+      - "127.0.0.1:3001:3001"
+      - "VM2_TAILSCALE_IP:3001:3001"
+    volumes: !override
+      - /data/freellmapi/data:/app/server/data
+      - /usr/local/share/ca-certificates/instabox-proxy.crt:/etc/ssl/instabox-proxy.crt:ro
+    environment:
+      NODE_EXTRA_CA_CERTS: /etc/ssl/instabox-proxy.crt
+      FREELLMAPI_SELF_UPDATE_URL: ""
