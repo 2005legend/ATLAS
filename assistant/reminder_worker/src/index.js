@@ -130,9 +130,41 @@ async function handle(request, env) {
       name: String(h.name || "").slice(0, 60), schedule: String(h.schedule || "daily"),
       streak: Number.isInteger(h.streak) ? h.streak : 0,
     }));
+    const extras = (Array.isArray(b.extras) ? b.extras : []).slice(0, 60).map((e) => ({
+      section: String(e.section || "Other").slice(0, 40), title: String(e.title || "").slice(0, 120),
+      due_ms: Number.isFinite(e.due_ms) ? e.due_ms : null, window_days: Number.isInteger(e.window_days) ? e.window_days : 0,
+    }));
+    const weekly = b.weekly && typeof b.weekly.text === "string" ? {
+      text: b.weekly.text.slice(0, 3000), time: /^\d{2}:\d{2}$/.test(b.weekly.time_local || "") ? b.weekly.time_local : "18:00",
+      computed_ms: Number.isFinite(b.weekly.computed_ms) ? b.weekly.computed_ms : Date.now(),
+    } : null;
     await env.DB.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES ('briefing', ?)")
-      .bind(JSON.stringify({ tasks, habits, inbox_new, time, off, updated_ms: Date.now() })).run();
+      .bind(JSON.stringify({ tasks, habits, extras, weekly, inbox_new, time, off, updated_ms: Date.now() })).run();
     return json({ ok: true, time_local: time, tasks: tasks.length });
+  }
+  const wm = path.match(/^\/wake\/(vm1|vm2)$/);
+  if (wm && request.method === "POST") { // on-demand wake from VM 1 when a message arrives and the other VM doesn't answer
+    const [key, id] = wm[1] === "vm1" ? [env.INSTABOX_KEY_VM1, env.INSTABOX_MACHINE_VM1] : [env.INSTABOX_KEY_VM2, env.INSTABOX_MACHINE_VM2];
+    if (!key || !id) return json({ error: "not configured" }, 503);
+    const st = await machineState(key, id);
+    if (st.ok && st.state === "running") return json({ vm: wm[1], state: "running", woke: false });
+    const lastK = `last_wake_${wm[1]}_ms`, last = parseInt((await kvGet(env, lastK)) || "0", 10);
+    if (Date.now() - last < 60000) return json({ vm: wm[1], state: st.state, woke: false, note: "wake already requested <60 s ago" });
+    await kvSet(env, lastK, Date.now());
+    const r = await wakeMachine(key, id);
+    await kvSet(env, "last_wake_result", JSON.stringify({ at: Date.now(), pending: 0, via: "hook", results: [{ name: wm[1], ...r, was: st.state }] }));
+    return json({ vm: wm[1], was: st.state, woke: r.ok, ...r }, r.ok ? 200 : 502);
+  }
+  if (path === "/wake/check" && request.method === "GET") { // read-only: shows each VM's state, never wakes
+    const out = {};
+    for (const [name, key, id] of [["vm1", env.INSTABOX_KEY_VM1, env.INSTABOX_MACHINE_VM1], ["vm2", env.INSTABOX_KEY_VM2, env.INSTABOX_MACHINE_VM2]])
+      out[name] = key && id ? await machineState(key, id) : { ok: false, error: "not configured" };
+    return json(out);
+  }
+  if (path === "/wake/status" && request.method === "GET") {
+    const r = await kvGet(env, "last_wake_result");
+    return json({ enabled: !!(env.INSTABOX_KEY_VM1 && env.INSTABOX_MACHINE_VM1), vm2: !!(env.INSTABOX_KEY_VM2 && env.INSTABOX_MACHINE_VM2),
+                  last: r ? JSON.parse(r) : null });
   }
   if (path === "/briefing/preview" && request.method === "GET") {
     const kv = await env.DB.prepare("SELECT value FROM kv WHERE key='briefing'").first();
@@ -159,13 +191,83 @@ function briefingText(b, now) {
   out.push(`📌 Due today (${today.length}):`, ...(today.length ? today.slice(0, 10).map(show) : ["• nothing due today"]), "");
   if (soon.length) out.push(`🗓 Next 7 days (${soon.length}):`, ...soon.slice(0, 8).map(show), "");
   if (undated.length) out.push("🧩 No deadline, top priority:", ...undated.slice(0, 3).map(show), "");
+  // extras from other modules (project deadlines, follow-ups, interviews, revisions): due within their window, or overdue
+  const groups = {};
+  for (const e of b.extras || []) {
+    if (!e.due_ms || e.due_ms > endToday + (e.window_days || 0) * 86400000) continue;
+    const when = e.due_ms < now ? "overdue" : e.due_ms <= endToday ? "today" : fmtLocal(e.due_ms, b.off).slice(0, 10);
+    (groups[e.section] = groups[e.section] || []).push(`• ${e.title} (${when})`);
+  }
+  for (const [section, items] of Object.entries(groups)) out.push(`${section}:`, ...items.slice(0, 8), "");
   const habits = (b.habits || []).filter((h) => h.schedule !== "weekdays" || ![0, 6].includes(local.getUTCDay()));
   if (habits.length) out.push("💪 Habits today: " + habits.map((h) => h.name + (h.streak ? ` 🔥${h.streak}` : "")).join(", "), "");
   if (b.inbox_new) out.push(`📥 ${b.inbox_new} new item(s) in your inbox.`);
   return out.join("\n").trim();
 }
 
+// ---------- wake-on-message ----------
+// If a Telegram message is waiting (the assistant VM is asleep and not polling), wake the VMs through
+// InstaBox's official wake endpoint. Only acts when a machine is really not running. Inactive until
+// INSTABOX_KEY_VM1 / INSTABOX_MACHINE_VM1 (and optionally _VM2) secrets are set.
+const IB = "https://api.instabox.sh/v1/machines/";
+const kvGet = async (env, k) => (await env.DB.prepare("SELECT value FROM kv WHERE key=?").bind(k).first())?.value;
+const kvSet = (env, k, v) => env.DB.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)").bind(k, String(v)).run();
+
+async function machineState(key, id) {
+  const r = await fetch(IB + id, { headers: { "X-API-Key": key } });
+  if (!r.ok) return { ok: false, error: `get ${r.status}` };
+  const m = await r.json();
+  return { ok: true, state: String(m.status || m.state || "unknown").toLowerCase() };
+}
+
+async function wakeMachine(key, id) {
+  const r = await fetch(IB + id + "/wake", { method: "POST", headers: { "X-API-Key": key, "content-type": "application/json" }, body: "{}" });
+  if (r.ok) return { ok: true };
+  const b = await r.json().catch(() => ({}));
+  const code = b.code || b.error?.code || "";
+  const retry = b.retryAfterSeconds || b.error?.retryAfterSeconds || parseInt(r.headers.get("retry-after") || "0", 10) || 0;
+  if (r.status === 409 && /operation_conflict/.test(JSON.stringify(b))) return { ok: true, pending: true };
+  return { ok: false, status: r.status, code, retry };
+}
+
+async function wakeOnMessage(env) {
+  const vms = [["VM 1", env.INSTABOX_KEY_VM1, env.INSTABOX_MACHINE_VM1], ["VM 2", env.INSTABOX_KEY_VM2, env.INSTABOX_MACHINE_VM2]]
+    .filter(([, k, id]) => k && id);
+  if (!vms.length || !env.TELEGRAM_BOT_TOKEN) return;
+  const info = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/getWebhookInfo`).then((r) => r.json()).catch(() => null);
+  const pending = info?.result?.pending_update_count || 0;
+  if (!pending) return;
+  const now = Date.now();
+  const last = parseInt((await kvGet(env, "last_wake_ms")) || "0", 10);
+  if (now - last < 90000) return; // a wake is already under way
+  const results = [];
+  for (const [name, key, id] of vms) {
+    const st = await machineState(key, id);
+    if (st.ok && st.state === "running") { results.push({ name, running: true }); continue; }
+    results.push({ name, ...(await wakeMachine(key, id)), was: st.state || st.error });
+  }
+  const woke = results.filter((r) => !r.running && r.ok);
+  const failed = results.filter((r) => !r.running && !r.ok);
+  if (!woke.length && !failed.length) return; // everything was already running: the assistant will answer itself
+  await kvSet(env, "last_wake_ms", now);
+  await kvSet(env, "last_wake_result", JSON.stringify({ at: now, pending, results }));
+  const lastNotice = parseInt((await kvGet(env, "last_wake_notice_ms")) || "0", 10);
+  if (now - lastNotice < 10 * 60000) return; // at most one notice per 10 minutes
+  let text;
+  const cool = failed.find((f) => f.status === 409 && /cooldown/.test(f.code || "machine_cooldown"));
+  if (cool) {
+    const mins = Math.max(1, Math.ceil((cool.retry || 300) / 60));
+    text = `😴 The assistant is resting after its 8-hour run limit and can't wake for about ${mins} min. Your message is kept and will be answered after that. Reminders still arrive on time.`;
+  } else if (failed.length) {
+    text = `⚠️ Couldn't wake the assistant (${failed.map((f) => `${f.name}: ${f.status} ${f.code}`).join(", ")}). Try the wake script on your laptop.`;
+  } else {
+    text = "⏳ Waking up the assistant. It will reply in about a minute.";
+  }
+  if (await sendTelegram(env, text)) await kvSet(env, "last_wake_notice_ms", now);
+}
+
 async function tick(env) {
+  await wakeOnMessage(env).catch((e) => console.log("wake check failed:", String(e)));
   const now = Date.now();
   const { results } = await env.DB.prepare(
     "SELECT * FROM reminders WHERE status='pending' AND due_ms <= ? ORDER BY due_ms LIMIT 40").bind(now).all();
@@ -196,6 +298,18 @@ async function tick(env) {
     const stale = ageH > 48 ? `\n\n(Task list last synced ${Math.round(ageH / 24)} days ago; changes made since may be missing.)` : "";
     if (await sendTelegram(env, `☀️ Good morning! Here's your day.\n\n${briefingText(b, now)}${stale}`)) {
       await env.DB.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES ('briefing_last_day', ?)").bind(today).run();
+    }
+  }
+
+  // weekly review, Sundays at its configured local time, once per week
+  if (b.weekly && local.getUTCDay() === 0 && hhmm >= b.weekly.time) {
+    const lastW = await kvGet(env, "weekly_last_day");
+    if (lastW !== today) {
+      const ageH = (now - b.weekly.computed_ms) / 3600000;
+      const asOf = ageH > 24 ? `\n\n(As of ${fmtLocal(b.weekly.computed_ms, b.off)}; the assistant was asleep since.)` : "";
+      if (await sendTelegram(env, `${b.weekly.text}${asOf}\n\nReply "plan next week" to turn this into a plan.`)) {
+        await kvSet(env, "weekly_last_day", today);
+      }
     }
   }
 }

@@ -28,6 +28,10 @@ ALLOWED = [
     ("POST", r"/tasks"), ("POST", r"/tasks/\d+/done"), ("PATCH", r"/tasks/\d+"), ("DELETE", r"/tasks/\d+"),
     ("POST", r"/inbox"), ("POST", r"/reminders"), ("POST", r"/reminders/r[0-9a-f]{8}/(cancel|snooze)"),
     ("POST", r"/habits/\d+/checkin"), ("POST", r"/expenses"), ("POST", r"/parse_time"),
+    # v2 modules: read views plus one-click actions (close follow-up, stop focus, mark a revision)
+    ("GET", r"/projects(\?[\w=&%+.-]*)?"), ("GET", r"/followups(\?[\w=&%+.-]*)?"), ("GET", r"/applications(\?[\w=&%+.-]*)?"),
+    ("GET", r"/focus/stats(\?[\w=&%+.-]*)?"), ("GET", r"/learning"), ("GET", r"/revise/due(\?days=\d+)?"),
+    ("POST", r"/followups/\d+/done"), ("POST", r"/focus/stop"), ("POST", r"/revise/\d+"),
 ]
 
 

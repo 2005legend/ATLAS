@@ -1,0 +1,4 @@
+name: wake-vm2
+description: Wake VM 2 (models + DSH) through the Cloudflare worker when a message arrives and VM 2 is asleep
+events:
+  - agent:start

@@ -61,6 +61,16 @@
   #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--panel-2); border: 1px solid var(--line);
            padding: 10px 14px; border-radius: 10px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; }
   #toast.show { opacity: 1; } #toast.err { border-color: var(--bad); }
+  .bar { height: 6px; background: var(--panel-2); border-radius: 999px; overflow: hidden; margin-top: 6px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+  .bar.ok > i { background: var(--ok); }
+  .pipeline { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0 4px; }
+  .pipeline span { background: var(--panel-2); border-radius: 8px; padding: 4px 9px; font-size: 12px; color: var(--muted); }
+  .pipeline b { color: var(--text); margin-right: 4px; font-variant-numeric: tabular-nums; }
+  .running { background: var(--panel-2); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; display: flex;
+             justify-content: space-between; align-items: center; gap: 10px; }
+  .acts { display: flex; gap: 6px; flex-shrink: 0; }
+  .acts button { padding: 3px 9px; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -84,6 +94,16 @@
       <div id="tasks"></div>
     </section>
     <section>
+      <h2>Projects</h2>
+      <ul id="projects"></ul>
+    </section>
+    <section>
+      <h2>Follow-ups & applications</h2>
+      <ul id="followups"></ul>
+      <div class="pipeline" id="app-counts"></div>
+      <ul id="applications"></ul>
+    </section>
+    <section>
       <h2>Add task</h2>
       <form id="f-task">
         <input type="text" name="title" placeholder="What needs doing?" required maxlength="300">
@@ -99,6 +119,12 @@
   </div>
 
   <div class="col">
+    <section>
+      <h2>Focus & learning <span id="focus-total" style="text-transform:none;letter-spacing:0;color:var(--text);font-size:15px"></span></h2>
+      <div id="focus-running"></div>
+      <ul id="learning"></ul>
+      <div class="group"><h3 id="revise-h">Revise today</h3><ul id="revise"></ul></div>
+    </section>
     <section>
       <h2>Habits</h2>
       <ul id="habits"></ul>
@@ -257,6 +283,72 @@ $("#f-exp").addEventListener("submit", async (e) => {
   catch (err) { toast(err.message, true); }
 });
 
+const bar = (pct, ok = false) => el("div", { class: "bar" + (ok ? " ok" : ""), role: "presentation" },
+  Object.assign(el("i"), { style: `width:${Math.max(0, Math.min(100, pct || 0))}%` }));
+const empty = (ul, text) => ul.append(el("li", { class: "empty" }, text));
+
+async function loadProjects() {
+  const r = await api("GET", "/projects");
+  const ul = $("#projects"); ul.replaceChildren();
+  if (!r.projects.length) return empty(ul, 'No projects yet. Tell the bot: "create a project SLM research, deadline end of month".');
+  for (const p of r.projects) {
+    const bits = [`${p.tasks_done}/${p.tasks_done + p.tasks_open} tasks`];
+    if (p.days_left !== null) bits.push(p.days_left < 0 ? `${-p.days_left} days past deadline` : `${p.days_left} days left`);
+    if (p.next_milestone) bits.push("next: " + p.next_milestone.title + (p.next_milestone.due ? ` (${p.next_milestone.due})` : ""));
+    ul.append(el("li", { class: "item" + (p.days_left !== null && p.days_left < 0 ? " overdue" : "") }, el("div", { class: "body" },
+      el("b", {}, p.name), ` ${p.progress_pct}%`, el("div", { class: "meta" }, bits.join(" · ")), bar(p.progress_pct, p.progress_pct === 100))));
+  }
+}
+async function loadPipeline() {
+  const [f, a] = await Promise.all([api("GET", "/followups"), api("GET", "/applications")]);
+  const ul = $("#followups"); ul.replaceChildren();
+  if (!f.followups.length) empty(ul, "No open follow-ups.");
+  for (const x of f.followups) ul.append(el("li", { class: "item" + (x.overdue ? " overdue" : "") },
+    el("div", { class: "body" }, `🔁 ${x.person}: ${x.about}`,
+      el("div", { class: "meta" }, `${x.overdue ? "was due" : "due"} ${x.due} · waiting ${x.waiting_days} day(s)${x.channel ? " · " + x.channel : ""}`)),
+    el("div", { class: "acts" }, el("button", { title: "They replied / done", onclick: async () => {
+      try { await api("POST", `/followups/${x.id}/done`); toast("Follow-up closed"); load(); } catch (e) { toast(e.message, true); }
+    } }, "✓ done"))));
+  const counts = $("#app-counts"); counts.replaceChildren();
+  for (const s of ["saved", "applied", "interview", "offer", "rejected"])
+    counts.append(el("span", {}, el("b", {}, a.by_status[s] || 0), s));
+  const al = $("#applications"); al.replaceChildren();
+  if (!a.applications.length) empty(al, 'No applications tracked. Tell the bot: "add the Amazon SDE intern role to my tracker".');
+  for (const x of a.applications) al.append(el("li", { class: "item" }, el("div", { class: "body" },
+    el("span", { class: "pill p-" + (x.status === "interview" || x.status === "offer" ? "high" : "low") }, x.status),
+    `💼 ${x.company}${x.role ? " — " + x.role : ""}`,
+    el("div", { class: "meta" }, x.next_step ? `${x.next_step}${x.next ? " · " + x.next : ""}` : (x.applied_on ? "applied " + x.applied_on : "")))));
+}
+async function loadLearning() {
+  const [fs, l, rv] = await Promise.all([api("GET", "/focus/stats?period=week"), api("GET", "/learning"), api("GET", "/revise/due")]);
+  $("#focus-total").textContent = fs.total_minutes ? `${fs.total} focus this week` : "";
+  const run = $("#focus-running"); run.replaceChildren();
+  if (fs.running) run.append(el("div", { class: "running" },
+    el("div", {}, `⏱ ${fs.running.topic}`, el("div", { class: "meta" }, `${fs.running.minutes}/${fs.running.planned_min} min · ends ${fs.running.planned_end}`)),
+    el("button", { onclick: async () => {
+      try { const s = await api("POST", "/focus/stop"); toast(`Focused ${s.minutes} min on ${s.topic}`); load(); } catch (e) { toast(e.message, true); }
+    } }, "Stop")));
+  const ul = $("#learning"); ul.replaceChildren();
+  if (!l.subjects.length) empty(ul, 'No subjects yet. Tell the bot: "I\'m learning ML, 3 hours a week".');
+  for (const s of l.subjects) {
+    const tgt = s.target_min_week ? ` / ${Math.round(s.target_min_week / 6) / 10}h` : "";
+    const bits = [s.streak_days ? `🔥 ${s.streak_days} day(s)` : "no streak"];
+    if (s.modules_total) bits.push(`${s.modules_done}/${s.modules_total} modules` + (s.next_module ? ` · next: ${s.next_module}` : ""));
+    ul.append(el("li", { class: "item" }, el("div", { class: "body" }, el("b", {}, s.name), ` ${s.this_week}${tgt}`,
+      el("div", { class: "meta" }, bits.join(" · ")), s.target_min_week ? bar(s.target_pct, s.target_pct >= 100) : "")));
+  }
+  $("#revise-h").textContent = `Revise today (${rv.due_count})`;
+  const rl = $("#revise"); rl.replaceChildren();
+  if (!rv.cards.length) empty(rl, "Nothing due.");
+  const mark = (c, remembered) => async () => {
+    try { const r = await api("POST", `/revise/${c.id}`, { remembered }); toast(`${c.topic}: next review ${r.due}`); loadLearning(); } catch (e) { toast(e.message, true); }
+  };
+  for (const c of rv.cards) rl.append(el("li", { class: "item" }, el("div", { class: "body" }, `📚 ${c.topic}`,
+      el("div", { class: "meta" }, (c.prompt ? c.prompt + " · " : "") + `review #${c.reviews + 1}`)),
+    el("div", { class: "acts" }, el("button", { title: "Remembered it", onclick: mark(c, true) }, "✓ got it"),
+      el("button", { title: "Forgot: show again tomorrow", onclick: mark(c, false) }, "✗ forgot"))));
+}
+
 const LABELS = { hermes_gateway: "Hermes + Telegram", dsh_bridge: "DSH bridge (VM 2)", freellmapi: "freellmapi",
   laptop_ollama: "Laptop Ollama", reminder_worker: "Reminders (Cloudflare)", disk_data: "VM 1 disk" };
 async function loadSystem() {
@@ -277,7 +369,8 @@ async function loadSystem() {
   }
 }
 async function load() {
-  await Promise.allSettled([loadAgenda(), loadReminders(), loadInbox(), loadHabits(), loadExpenses()]).then((rs) => {
+  await Promise.allSettled([loadAgenda(), loadReminders(), loadInbox(), loadHabits(), loadExpenses(),
+                            loadProjects(), loadPipeline(), loadLearning()]).then((rs) => {
     const bad = rs.find((r) => r.status === "rejected"); if (bad) toast(bad.reason.message, true);
   });
 }

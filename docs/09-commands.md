@@ -98,6 +98,56 @@ nothing connects to a bank.
 | `Plan my day, I have 3 hours` | A suggested order using your real tasks and deadlines |
 | `I have 2 hours free, what should I work on?` | Picks from urgent and due-soon tasks |
 
+### Projects and the weekly review
+
+| Say | What happens |
+|---|---|
+| `Create a project SLM research, deadline end of November` | A project with a deadline |
+| `Add "run the baseline" to SLM research as a milestone, due Friday` | A task linked to the project |
+| `Show me everything pending in my research project` | Open tasks, milestones, overdue items, linked notes, progress %, days left |
+| `Pause the SLM project` / `Mark it done` | Changes its status |
+| `How did my week go?` | Done, missed, habits, spending, projects, focus, study, next week |
+
+The weekly review also arrives by itself on Sundays at 18:00.
+
+### Follow-ups and job applications
+
+| Say | What happens |
+|---|---|
+| `I emailed my professor about the thesis. Remind me to follow up in four days` | Follow-up with a reminder at 09:00 that day |
+| `Who am I waiting on?` | Open follow-ups, due dates, days waiting |
+| `The professor replied` | Closes it and cancels the reminder |
+| `Add the Amazon SDE intern role to my application tracker, applied today` | Application, status applied |
+| `My Amazon interview is Thursday 3pm, technical round` | Status interview; reminders 18:00 the day before and 1 hour before |
+| `Amazon rejected me` / `I got the offer` | Status change; pending interview reminders are cancelled |
+| `Show my applications` | Active applications, next steps, counts per status |
+
+### Focus sessions and sorting the inbox
+
+| Say | What happens |
+|---|---|
+| `Start a 50-minute research session` | Timer; a message arrives when it ends ("take a 10-min break") |
+| `I got distracted` | Counts a distraction in the running session |
+| `Done, stop the timer` | Ends it and tells you the minutes |
+| `How much did I focus this week?` | Minutes per topic and project |
+| `Sort my inbox` | Lists unsorted captures with a suggestion each; acts only on what you confirm |
+| `Turn the GPU note into a reminder for tomorrow 10am` / `Archive the meme link` / `Keep the JAX note under my sim project` | One item sorted |
+
+A session you forget to stop is closed at its planned end an hour later.
+
+### Learning and revision
+
+| Say | What happens |
+|---|---|
+| `I'm learning ML, 3 hours a week` | Subject with a weekly goal (`30 min a day` works too) |
+| `I studied ML for 1h30` | Study time; focus sessions whose topic names the subject count by themselves |
+| `ML modules: linear models, trees, neural nets` / `I finished trees` | Course modules and progress |
+| `How is my learning going?` | Hours this week vs goal, streak, modules, next module |
+| `Remind me to revise transformers after three days` | A revision card |
+| `What should I revise today?` / `I remembered it` / `I forgot it` | Gaps grow 3 → 7 → 14 → 30 → 60 days; forgetting brings it back tomorrow |
+
+Topics due for revision show in the morning briefing as "📚 Revise today".
+
 ### Coding (the DSH worker on VM 2)
 
 | Say | What happens |
@@ -152,6 +202,10 @@ On the laptop: `laptop/dashboard.ps1` (or `powershell -ExecutionPolicy Bypass -F
 - Spending this month by category, with a form to log an expense.
 - Reminders: upcoming, with cancel, and a form to add one.
 - Inbox: capture an idea or note; search old ones.
+- Projects: progress bar, days left, next milestone.
+- Follow-ups & applications: open follow-ups with a "✓ done" button; application counts per status and next steps.
+- Focus & learning: the running focus session with a Stop button, study time against each weekly goal, and today's
+  revisions with "✓ got it" / "✗ forgot".
 - System: Hermes and Telegram, DSH bridge, freellmapi, laptop Ollama, the reminder worker, VM 1 disk space.
 
 If it says VM 1 is unreachable, run `wake-vms.ps1` and check that Tailscale is connected.
@@ -228,10 +282,17 @@ From `assistant/reminder_worker` on the laptop:
 
 The bot picks these itself; you never call them by name.
 
-**Assistant (`pa`, 23 tools):** `task_add`, `task_list`, `task_done`, `task_update`, `task_delete`, `idea_add`,
-`inbox_add`, `inbox_search`, `inbox_to_task`, `reminder_add`, `reminder_list`, `reminder_cancel`,
-`reminder_snooze`, `habit_add`, `habit_checkin`, `habit_list`, `habit_remove`, `expense_add`, `expense_list`,
-`expense_summary`, `expense_delete`, `agenda`, `parse_time`.
+**Assistant (`pa`, 50 tools):**
+- Tasks and planning: `task_add`, `task_list`, `task_done`, `task_update`, `task_delete`, `agenda`, `parse_time`.
+- Inbox: `idea_add`, `inbox_add`, `inbox_search`, `inbox_to_task`, `inbox_triage`, `inbox_to_reminder`, `inbox_keep`, `inbox_archive`.
+- Reminders: `reminder_add`, `reminder_list`, `reminder_cancel`, `reminder_snooze`.
+- Habits and expenses: `habit_add`, `habit_checkin`, `habit_list`, `habit_remove`, `expense_add`, `expense_list`,
+  `expense_summary`, `expense_delete`.
+- Projects: `project_add`, `project_list`, `project_overview`, `project_update`, `weekly_review`.
+- Follow-ups and applications: `followup_add`, `followup_list`, `followup_done`, `application_add`,
+  `application_update`, `application_list`.
+- Focus: `focus_start`, `focus_stop`, `focus_distracted`, `focus_stats`.
+- Learning: `learning_add`, `study_log`, `module_add`, `module_done`, `learning_progress`, `revise_add`, `revise_due`, `revise_done`.
 
 **Coding worker (`dsh`, 8 tools):** `dsh_submit`, `dsh_wait`, `dsh_status`, `dsh_result`, `dsh_cancel`,
 `dsh_history`, `dsh_list_files`, `dsh_fetch_files`.
@@ -260,6 +321,14 @@ header `Authorization: Bearer <contents of /data/pa/token>`. Only `/health` work
 | `POST /habits` `{"name", "how_often"}` · `GET /habits` · `POST /habits/{id}/checkin` `{"day"}` · `DELETE /habits/{id}` | Habits |
 | `POST /expenses` `{"amount", "category", "note", "day"}` · `GET /expenses?days=30` · `GET /expenses/summary?period=month` · `DELETE /expenses/{id}` | Expenses |
 | `GET /agenda?days=7` | Overdue, today, upcoming, inbox count, done today |
+| `POST /projects` `{"name", "description", "deadline"}` · `GET /projects` · `PATCH /projects/{name}` · `GET /projects/{name}/overview` | Projects |
+| `GET /review` | This week's review (also sent Sundays 18:00) |
+| `POST /followups` `{"person", "about", "when", "channel"}` · `GET /followups` · `POST /followups/{id}/done` (or `/cancel`) | Follow-ups |
+| `POST /applications` `{"company", "role", "status", …}` · `PATCH /applications/{company or id}` `{"status", "next_step", "next_when"}` · `GET /applications` | Job tracker |
+| `POST /focus/start` `{"topic", "minutes", "project"}` · `POST /focus/stop` · `POST /focus/distracted` · `GET /focus/stats?period=week` | Focus sessions |
+| `GET /inbox/triage` · `POST /inbox/{id}/to_reminder` `{"when"}` · `POST /inbox/{id}/keep` `{"project"}` · `POST /inbox/{id}/archive` | Sorting the inbox |
+| `POST /learning` `{"subject", "target"}` · `POST /learning/log` `{"subject", "duration"}` · `POST /learning/modules` · `POST /learning/modules/done` · `GET /learning` | Learning |
+| `POST /revise` `{"topic", "first_in", "prompt"}` · `GET /revise/due?days=0` · `POST /revise/{id}` `{"remembered"}` · `POST /revise/{id}/retire` | Spaced repetition |
 | `POST /briefing/push` | Send the current task list to the reminder worker now |
 
 Example:

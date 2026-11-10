@@ -280,6 +280,9 @@ read -rp 'SYNC_SECRET: ' S && printf '{"url":"https://pa-reminders.%s.workers.de
 Check: `curl -s 127.0.0.1:8100/health` shows the time zone and local time; in Telegram, "Remind me in 3 minutes to
 test reminders" arrives on time.
 
+Optional, if your VMs pause when idle: the wake-on-message secrets and the `wake-vm2` hook. The commands are in
+`docs/05-assistant.md`, section "Waking sleeping VMs".
+
 ## 10. VM 1: backups
 
 ```bash

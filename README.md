@@ -1,8 +1,9 @@
 # ATLAS
 
 A personal AI assistant you run yourself for ₹0 a month. You talk to it on Telegram. It keeps your tasks,
-reminders, notes, habits and expenses in a real database, sends reminders on time even while its servers
-sleep, and hands coding work to a sandboxed coding agent on a second machine.
+projects, reminders, notes, habits, expenses, follow-ups, job applications, focus time and study progress in a
+real database, sends reminders on time even while its servers sleep, wakes them when you write, and hands
+coding work to a sandboxed coding agent on a second machine.
 
 It is built from free parts:
 
@@ -11,8 +12,8 @@ It is built from free parts:
 | [Hermes Agent](https://hermes-agent.nousresearch.com) | The assistant: chat, planning, tools, memory, Telegram | Cloud VM 1 |
 | [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) | Coding agent; each task runs in its own systemd sandbox | Cloud VM 2 |
 | [freellmapi](https://github.com/tashfeenahmed/freellmapi) | One OpenAI-compatible endpoint over several free model tiers | Cloud VM 2 |
-| Personal-assistant service (this repo) | Tasks, inbox, habits, expenses, agenda (FastAPI + SQLite) | Cloud VM 1 |
-| Reminder worker (this repo) | Sends reminders and the morning briefing on time | Cloudflare Workers (free plan) |
+| Personal-assistant service (this repo) | Tasks, projects, inbox, habits, expenses, follow-ups, job tracker, focus, learning, revision (FastAPI + SQLite) | Cloud VM 1 |
+| Reminder worker (this repo) | Sends reminders, the morning briefing and the Sunday review on time; wakes paused VMs | Cloudflare Workers (free plan) |
 | Ollama | Local fallback models | Laptop and VM 2 |
 | Tailscale | Private network between all three machines | Everywhere |
 | Dashboard (this repo) | One page with today's tasks, habits, spending and system health | Your laptop |
@@ -34,6 +35,11 @@ Track German 5 times a week
 I did DSA today
 Spent ₹120 on lunch
 What's on today?
+Show me everything pending in my research project
+I emailed my professor. Remind me to follow up in four days
+My Amazon interview is Thursday 3pm, technical round
+Start a 50-minute research session
+Remind me to revise transformers after three days
 Use DSH to write a prime checker with pytest tests and run them
 ```
 
@@ -41,8 +47,9 @@ The assistant only says "added" or "set" after the database has saved it, and it
 stored. Times like "tomorrow 10am" or "by Sunday" are parsed in code, in your time zone, not guessed by the
 model.
 
-At 08:00 every morning a briefing arrives with overdue tasks, today's tasks, the next seven days and today's
-habits. It comes from the Cloudflare worker, so it arrives even when both VMs are asleep.
+At 08:00 every morning a briefing arrives with overdue tasks, today's tasks, the next seven days, today's
+habits, follow-ups due, upcoming interviews, project deadlines and topics to revise. On Sundays at 18:00 a weekly
+review follows. Both come from the Cloudflare worker, so they arrive even when both VMs are asleep.
 
 ## Architecture
 
@@ -69,6 +76,8 @@ These are from this build, not claims:
   from DSH.
 - A 12-task benchmark of Hermes itself (reasoning, coding, debugging, research, tool use, memory), 2–3 runs
   per setting: 6.3/12 with most tools off, 8.0/12 after enabling the right toolsets. Single runs swing by ±2.
+  With all 50 assistant tools always visible (about 22K prompt tokens per call) it scored 8.3/12 over 3 runs,
+  so adding the v2 features didn't measurably hurt general ability.
 - A Telegram reminder created at 12:37 for "in 3 minutes" arrived at 12:40.
 
 ## Honest limits
